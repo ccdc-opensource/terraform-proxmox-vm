@@ -1,9 +1,26 @@
 # terraform-proxmox-vm
 
-A template-first VM module using `bpg/proxmox`. The baseline creates and starts
-full clones, defaulting to one VM. Set `vm_count` to change the number of VMs.
-Inherited hardware remains unmanaged unless you opt into an override.
-Use the same module for prepared Linux and Windows templates.
+A VM module using `bpg/proxmox`, defaulting to the legacy VM resource.
+It creates and starts full clones of prepared Linux or Windows templates.
+Set `vm_count` to change the number of VMs, or explicitly opt into the
+experimental clone-specific implementation.
+
+## Resource modes
+
+| `vm_mode` | Resource | Behaviour |
+| --- | --- | --- |
+| `"legacy"` (default) | `proxmox_virtual_environment_vm` | Explicit boot-disk configuration; permits externally managed node placement. |
+| `"experimental"` | `proxmox_cloned_vm` | Opt-in hardware management; fixed-node deployment. |
+
+`experimental` is this module's label for the clone-specific implementation.
+It does not select the separate provider resource named `proxmox_vm`.
+
+In legacy mode, Terraform ignores `node_name` changes after creation so that
+ProxLB or another external system can own placement. Editing `node_name` will
+not request a Terraform migration. The provider discovers the current node
+during refresh, but live migration, subsequent updates, and destruction must
+be tested on your cluster before relying on this integration. The module does
+not install, configure, or invoke ProxLB.
 
 ## Requirements
 
@@ -33,6 +50,12 @@ module "vm" {
   node_name    = "pve"
   source_vm_id = 100
   vm_name      = "sandbox"
+
+  root_disk = {
+    slot         = "scsi0"
+    size_gb      = 128
+    datastore_id = "local-lvm"
+  }
 }
 ```
 
@@ -40,10 +63,15 @@ The local source above assumes the module is checked out at that path. Your root
 configuration must also declare the `bpg/proxmox` provider requirement; complete
 examples include that declaration.
 
-Only the target node, source template ID, and base VM name are required. This
-creates `sandbox-01`; `vm_count` defaults to `1`. Proxmox allocates each VM ID.
-No production names, tags, storage, CPU model, graphics, or device deletions are
-imposed.
+This creates `sandbox-01`; `vm_count` defaults to `1`. Proxmox allocates each VM
+ID. Replace the illustrative boot-disk slot, capacity, and datastore with your
+template's settings. Legacy mode requires these explicitly to avoid the
+provider's implicit 8 GiB / `local-lvm` disk defaults. The datastore must match
+the desired OS disk location after cloning; changing it can move the disk.
+
+For the previous minimal template-only behaviour, set
+`vm_mode = "experimental"` and omit `root_disk`. Only the target node, template
+ID, and base name are then required.
 
 ## Template preparation
 
@@ -60,17 +88,19 @@ Templates, not this module, configure DHCP and the operating system.
 
 The VM name in Proxmox does not set the guest hostname. A successful apply or a
 started VM does not prove that the guest has booted or obtained a DHCP lease.
-This resource does not expose guest IP addresses, so the module does not provide
-an IP output.
+The module does not expose guest IP addresses, keeping outputs consistent
+between resource modes.
 
 ## Inputs
 
 Optional inputs default to `null` unless shown otherwise. Null means the module
 does not supply that override; it does not restore an earlier template setting.
+Legacy provider defaults may still apply.
 
 | Input | Type | Purpose |
 | --- | --- | --- |
-| `node_name` | string | Required target node. |
+| `vm_mode` | string | `"legacy"` by default; `"experimental"` is an explicit opt-in. |
+| `node_name` | string | Required initial node; only experimental mode enforces later changes. |
 | `vm_name` | string | Required base name; each VM gets an indexed suffix such as `-01`. |
 | `vm_count` | number | Non-negative integer VM count; default `1` (also used for null). |
 | `source_vm_id` | number | Required positive integer template ID. |
@@ -81,17 +111,36 @@ does not supply that override; it does not restore an earlier template setting.
 | `cpu_cores` | number | Cores per socket, integer 1-1024. |
 | `memory_size` | number | RAM in MiB, integer 64-268435456. |
 | `network_bridge` | string | Opt into managing `net0` as a VirtIO NIC on this bridge. |
-| `root_disk` | object | Existing OS disk `slot` and desired `size_gb`. |
+| `root_disk` | object | OS disk `slot`, `size_gb`, and optional `datastore_id`; all three are required in legacy mode. |
 | `additional_disks` | map(object) | Disk slot to `{ size_gb, datastore_id }`; default `{}`. |
 
-CPU and memory objects are omitted unless their overrides are set. Socket count,
-CPU type, and memory ballooning are not overridden. Ensure requested RAM is
-compatible with the template's ballooning floor.
+CPU and memory configuration is omitted unless overrides are supplied.
+Experimental mode sends only the requested fields. Legacy mode uses nested
+blocks whose defaults can also affect sockets, CPU type, and ballooning.
+Review the plan against the template rather than assuming partial-block
+inheritance. A root disk is mandatory in legacy mode when `vm_count` is nonzero.
 
-### Provider device-override limitations
+### Legacy configuration ownership
 
-**Omitting a device preserves it; managing only part of a device does not
-guarantee preservation of its other options.** In provider v0.118.1:
+Legacy mode does not provide the clone-specific resource's opt-in management
+contract:
+
+- Supply the OS disk datastore explicitly. The module does not guess it or
+  silently use `local-lvm`.
+- Include the complete intended data-disk set in `additional_disks`. Removing
+  entries, or omitting inherited data disks, can remove/detach disks during
+  reconciliation. Do not treat omission as relinquishing management.
+- When `network_bridge` is supplied, the resource manages a single VirtIO NIC
+  list. This can remove additional NICs and reset VLAN/firewall/other options.
+  Leave it null to avoid supplying a network override.
+- Review BIOS, EFI, TPM, cloud-init, agent, CPU, and memory settings against the
+  provider's defaults for both Linux and Windows templates.
+- Changing disk datastores can move existing volumes.
+
+### Experimental device-override limitations
+
+Omitted devices are unmanaged, but partial device overrides do not guarantee
+preservation of other options. In provider v0.118.1:
 
 - Setting `network_bridge` reconstructs `net0` as VirtIO. Unspecified VLAN,
   firewall, MTU, MAC, and other NIC settings can change/reset. Use this override
@@ -118,8 +167,9 @@ module "vm" {
   memory_size  = 8192
 
   root_disk = {
-    slot    = "scsi0"
-    size_gb = 128
+    slot         = "scsi0"
+    size_gb      = 128
+    datastore_id = "local-lvm"
   }
 
   additional_disks = {
@@ -132,27 +182,29 @@ module "vm" {
 The [disk example](examples/disks/main.tf) also demonstrates an explicit bridge
 override. Adapt the slots, sizes, and storage to your template.
 
-- Sizes are integer **GiB**, from 1 to 10240, matching the provider limit.
+- Sizes are integer **GiB**, from 1 to 10240, the module's shared range.
 - Supported slots are `ide0`-`ide3`, `sata0`-`sata5`, `scsi0`-`scsi30`, and
   `virtio0`-`virtio15`. Guest machine/controller constraints still apply.
 - `root_disk.slot` must already contain the OS disk. The module does not assume
   that every template boots from `scsi0`.
-- Additional-disk slots must be unused in the template. The module rejects a
-  collision with the declared root slot, but cannot statically inspect inherited
-  slots. An occupied slot could manage an existing disk instead of adding one.
+- Use unused slots when creating additional disks. In legacy mode also describe
+  inherited data disks you intend to retain. The module rejects a collision
+  with the declared root slot but cannot inspect template devices statically.
 - Disks can grow, not shrink. A smaller requested size produces a provider error
   against the actual disk size. Existing template sizes are not known to static
   input validation.
-- `datastore_id` allocates new disks; changing it is not a storage-migration API
-  for existing disks. `target_datastore` instead controls clone placement.
+- `target_datastore` controls clone placement. In legacy mode per-disk
+  `datastore_id` also controls placement and can move existing disks. In
+  experimental mode it allocates additional disks but does not migrate existing
+  volumes; `root_disk.datastore_id` is unused in that mode.
 - Expanding a virtual disk does not guarantee expansion of the guest partition
   or filesystem. Formatting/mounting new data disks is also a guest task.
-- Removing a map entry stops managing that disk; it does **not** delete it.
-  Changing the slot is not a disk rename.
+- In experimental mode removing an entry stops management without deletion.
+  In legacy mode removal can remove/detach the disk. Changing a slot is not a
+  disk rename in either mode.
 
-The resource uses a map attribute, not nested disk blocks. The module uses a
-`for` expression and `merge` to construct it dynamically; a literal `dynamic`
-block is not compatible with this resource schema.
+The module constructs a disk map for experimental mode and uses `dynamic`
+disk blocks for legacy mode.
 
 ## Built-in VM count
 
@@ -166,6 +218,12 @@ module "vm" {
   source_vm_id = 100
   vm_name      = "sandbox"
   vm_count     = 3
+
+  root_disk = {
+    slot         = "scsi0"
+    size_gb      = 128
+    datastore_id = "local-lvm"
+  }
 }
 
 output "vm_ids" {
@@ -188,15 +246,17 @@ time. Use separate module calls if you need different per-VM configurations.
 | --- | --- |
 | `vm_ids` | List of Proxmox-assigned numeric VM IDs, in index order. |
 | `vm_names` | List of indexed VM names, in index order. |
-| `node_names` | List of target nodes, in index order. |
+| `node_names` | List of nodes in index order; legacy mode refreshes actual placement. |
 
 Outputs are lists for every count, including one and zero.
 
 ## Lifecycle and scope
 
-Clone settings and target-node changes can require replacement. Always inspect
-the plan before applying. No inherited device is explicitly deleted by the
-module, including `ide2`, which may hold cloud-init or installation media.
+Mode changes and clone settings can require replacement. Experimental mode also
+requires replacement for target-node changes; legacy mode ignores node changes
+after creation. Always inspect the plan before applying. No explicit `ide2`
+deletion is configured, but legacy resource defaults and reconciliation still
+need review.
 
 `delete_unreferenced_disks_on_destroy` is explicitly false. **This does not
 protect the VM or its attached disks from `terraform destroy`.** Standard
@@ -207,9 +267,8 @@ or SSH key injection, guest hostname/domain join, template creation, additional
 NICs, VLAN/firewall controls, device tuning/deletion, linked clones, passthrough,
 HA, backups, and advanced timeouts.
 
-Some additions require `proxmox_virtual_environment_vm` with `clone` rather than
-this resource. Assess state migration and replacement risk before changing the
-resource type; do not treat it as a drop-in replacement.
+Legacy mode provides a foundation for externally managed placement; actual
+ProxLB configuration and live acceptance are outside this module.
 
 ### Changes from the initial draft
 
@@ -226,9 +285,11 @@ resource type; do not treat it as a drop-in replacement.
   the module appends `-01`, `-02`, and so on.
 - Singular outputs are replaced by `vm_ids`, `vm_names`, and `node_names`.
   Update callers to consume lists.
+- `vm_mode` now defaults to `"legacy"`. Existing clone-backed deployments need
+  an explicit `"experimental"` selection to preserve the old resource type.
 
-The module includes a `moved` block from the earlier singleton resource to
-index zero, avoiding recreation solely due to the resource-address change.
+The module retains a `moved` block from the earlier singleton cloned resource to
+index zero in experimental mode. It does not convert state between modes.
 An existing VM's name gains the `-01` suffix. Inspect the migration plan before
 applying. If migrating from caller-level module `count` to this built-in input,
 the caller must also explicitly migrate module addresses; the internal `moved`
@@ -248,10 +309,11 @@ terraform test
 ```
 
 Tests use a mocked provider and do not contact Proxmox. They cover minimal
-inheritance wiring, explicit overrides, disk maps and validation, outputs, and
-the two examples. Direct module tests cover default/null/zero/one/multiple VM
-counts, scaling, and invalid counts. Mocked IDs are fixed test values, not
-evidence of real Proxmox allocation or guest readiness.
+experimental inheritance wiring, legacy block mappings, mode validation,
+explicit overrides, disk maps, outputs, and the two examples. Tests cover
+default/null/zero/one/multiple VM counts, scaling, and legacy node-change
+suppression. Mocked IDs are fixed test values, not evidence of real Proxmox
+allocation, template inheritance, migration discovery, or guest readiness.
 
 Validate the example configurations separately:
 
@@ -266,19 +328,23 @@ terraform -chdir=examples/disks validate
 
 Run only in an authorised disposable environment:
 
-1. Clone a prepared Linux template and a prepared Windows template.
+1. Clone a prepared Linux template and a prepared Windows template in each mode.
 2. Verify guest boot and DHCP; inspect inherited firmware, devices, and CPU/RAM.
 3. Check explicitly managed NIC/disk options against the limitations above.
 4. Grow an OS disk, add two data disks, and grow a managed data disk. Inspect
    slot identity and actual virtual capacity separately from guest filesystems.
 5. Verify the next plan is clean and a shrink request fails clearly.
 6. Create multiple VMs and verify unique names and IDs.
-7. Obtain explicit approval before destructive checks or cleanup.
+7. In legacy mode, migrate a disposable VM externally, then verify refresh, a
+   clean plan, and a configuration update on the new node.
+8. Obtain explicit approval before destructive checks; verify legacy destruction
+   still reaches the correct VM after migration.
 
 Local mocked tests do not replace this checklist.
 
 ## Provider references
 
 - [Cloned VM resource](https://github.com/bpg/terraform-provider-proxmox/blob/v0.118.1/docs/resources/cloned_vm.md)
+- [Legacy VM resource](https://github.com/bpg/terraform-provider-proxmox/blob/v0.118.1/docs/resources/virtual_environment_vm.md)
 - [Template inheritance guide](https://github.com/bpg/terraform-provider-proxmox/blob/v0.118.1/docs/guides/cloned-vm.md)
 - [Device update implementation](https://github.com/bpg/terraform-provider-proxmox/blob/v0.118.1/fwprovider/nodes/clonedvm/resource.go)

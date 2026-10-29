@@ -11,6 +11,12 @@ terraform {
 
 provider "proxmox" {}
 
+variable "vm_mode" {
+  description = "Legacy by default; experimental opts into the clone-specific resource."
+  type        = string
+  default     = "legacy"
+}
+
 variable "node_name" {
   description = "Target Proxmox node."
   type        = string
@@ -26,12 +32,23 @@ variable "vm_name" {
   type        = string
 }
 
+variable "root_disk" {
+  description = "Existing boot disk slot, desired GiB capacity, and datastore after cloning."
+  type = object({
+    slot         = string
+    size_gb      = number
+    datastore_id = string
+  })
+}
+
 module "vm" {
   source = "../.."
 
   node_name    = var.node_name
   source_vm_id = var.source_vm_id
   vm_name      = var.vm_name
+  vm_mode      = var.vm_mode
+  root_disk    = var.root_disk
 }
 
 output "vm_ids" {

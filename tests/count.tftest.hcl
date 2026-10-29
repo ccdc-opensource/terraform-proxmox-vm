@@ -7,6 +7,7 @@ mock_provider "proxmox" {
 }
 
 variables {
+  vm_mode      = "experimental"
   node_name    = "pve-test"
   source_vm_id = 100
   vm_name      = "sandbox"

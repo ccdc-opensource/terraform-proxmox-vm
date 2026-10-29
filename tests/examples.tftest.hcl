@@ -1,4 +1,10 @@
 mock_provider "proxmox" {
+  mock_resource "proxmox_virtual_environment_vm" {
+    defaults = {
+      vm_id = 200
+    }
+  }
+
   mock_resource "proxmox_cloned_vm" {
     defaults = {
       id = 200
@@ -20,6 +26,11 @@ run "minimal_example_when_applied_exposes_vm_ids" {
 
   variables {
     vm_name = "minimal-test"
+    root_disk = {
+      slot         = "scsi0"
+      size_gb      = 128
+      datastore_id = "root-storage"
+    }
   }
 
   assert {

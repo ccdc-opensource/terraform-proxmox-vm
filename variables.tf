@@ -1,5 +1,17 @@
+variable "vm_mode" {
+  description = "VM implementation: legacy (default) or experimental (clone-specific). Changing modes requires a state migration or VM replacement."
+  type        = string
+  default     = "legacy"
+  nullable    = false
+
+  validation {
+    condition     = contains(["legacy", "experimental"], var.vm_mode)
+    error_message = "vm_mode must be legacy or experimental."
+  }
+}
+
 variable "node_name" {
-  description = "Proxmox node on which to create the VM."
+  description = "Initial Proxmox node. Legacy mode ignores later node changes to permit external placement; experimental mode enforces this node."
   type        = string
   nullable    = false
 
@@ -85,7 +97,7 @@ variable "tags" {
 }
 
 variable "cpu_cores" {
-  description = "Optional cores per socket (1-1024). Other CPU settings remain inherited."
+  description = "Optional cores per socket (1-1024). Legacy CPU-block defaults can also affect other CPU settings."
   type        = number
   default     = null
 
@@ -96,7 +108,7 @@ variable "cpu_cores" {
 }
 
 variable "memory_size" {
-  description = "Optional RAM in MiB (64-268435456). Inherited ballooning settings must remain compatible."
+  description = "Optional RAM in MiB (64-268435456). Review legacy memory-block defaults and template ballooning settings."
   type        = number
   default     = null
 
@@ -107,7 +119,7 @@ variable "memory_size" {
 }
 
 variable "network_bridge" {
-  description = "Optional net0 bridge override. Opts into a VirtIO NIC and can reset inherited NIC options; null preserves the NIC."
+  description = "Optional VirtIO net0 bridge override. Can reset NIC options; legacy mode manages the entire NIC list when supplied."
   type        = string
   default     = null
 
@@ -118,10 +130,11 @@ variable "network_bridge" {
 }
 
 variable "root_disk" {
-  description = "Optional existing OS disk slot and desired size in GiB. Grow only; unspecified disk tuning can reset."
+  description = "Existing OS disk slot and desired GiB size. Required with datastore_id in legacy mode; optional in experimental mode. Grow only."
   type = object({
-    slot    = string
-    size_gb = number
+    slot         = string
+    size_gb      = number
+    datastore_id = optional(string)
   })
   default = null
 
@@ -137,10 +150,17 @@ variable "root_disk" {
     )
     error_message = "root_disk.size_gb must be an integer between 1 and 10240 GiB."
   }
+
+  validation {
+    condition = var.root_disk == null ? true : (
+      var.root_disk.datastore_id == null ? true : trimspace(var.root_disk.datastore_id) != ""
+    )
+    error_message = "root_disk.datastore_id must be null or a non-empty datastore name."
+  }
 }
 
 variable "additional_disks" {
-  description = "Data disks keyed by unused template disk slots. Removing an entry stops management; it does not delete the disk."
+  description = "Data disks keyed by slot. Legacy mode requires the complete data-disk set and can remove omitted disks; experimental mode only manages listed slots."
   type = map(object({
     size_gb      = number
     datastore_id = string
