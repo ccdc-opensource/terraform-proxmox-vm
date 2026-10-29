@@ -135,39 +135,17 @@ blocks whose defaults can also affect sockets, CPU type, and ballooning.
 Review the plan against the template rather than assuming partial-block
 inheritance. A root disk is mandatory in legacy mode when `vm_count` is nonzero.
 
-### Legacy configuration ownership
+## Important caveats
 
-Legacy mode does not provide the clone-specific resource's opt-in management
-contract:
-
-- Supply the OS disk datastore explicitly. The module does not guess it or
-  silently use `local-lvm`.
-- Include the complete intended data-disk set in `additional_disks`. Removing
-  entries, or omitting inherited data disks, can remove/detach disks during
-  reconciliation. Do not treat omission as relinquishing management.
-- When `network_bridge` is supplied, the resource manages a single VirtIO NIC
-  list. This can remove additional NICs and reset VLAN/firewall/other options.
-  Leave it null to avoid supplying a network override.
-- Review BIOS, EFI, TPM, cloud-init, agent, CPU, and memory settings against the
-  provider's defaults for both Linux and Windows templates.
-- Changing disk datastores can move existing volumes.
-
-### Experimental device-override limitations
-
-Omitted devices are unmanaged, but partial device overrides do not guarantee
-preservation of other options. In provider v0.118.1:
-
-- Setting `network_bridge` reconstructs `net0` as VirtIO. Unspecified VLAN,
-  firewall, MTU, MAC, and other NIC settings can change/reset. Use this override
-  only for a simple network with VirtIO drivers; leave it unset when you need
-  the inherited NIC configuration.
-- Managing an existing disk preserves its volume reference but can reset
-  unspecified cache, discard, I/O-thread, and other disk options. Use root-disk
-  growth only where those provider/default options are acceptable.
-
-These are provider constraints, not inheritance guarantees the module can add.
-Templates requiring custom NIC or disk tuning should retain their inherited
-devices until explicit support for those settings is added.
+- `legacy` mode requires an explicit `root_disk` and an accurate `additional_disks`
+  set. Omitting or removing disks can detach or delete them during reconciliation.
+- `experimental` mode is the opt-in clone path. It is simpler for disk/device
+  management, but it does not preserve every inherited NIC or disk setting.
+- `network_bridge` and other device overrides are intentionally simple: use them
+  for a basic VirtIO setup or leave them unset.
+- `tags = []` is only a supported clear action in `experimental` mode.
+- Disks are integer **GiB**, grow-only, and the guest filesystems still need
+  their own resize and mount operations.
 
 ## Growing disks and adding data disks
 
@@ -194,37 +172,27 @@ module "vm" {
 }
 ```
 
-The [disk example](examples/disks/main.tf) also demonstrates an explicit bridge
-override. Adapt the slots, sizes, and storage to your template.
+The [disk example](examples/disks/main.tf) demonstrates a simple bridge override
+and a multi-disk layout. Adapt the slots, sizes, and storage to your template.
 
-- Sizes are integer **GiB**, from 1 to 10240, the module's shared range.
+- Sizes are integer **GiB**, from 1 to 10240.
 - Supported slots are `ide0`-`ide3`, `sata0`-`sata5`, `scsi0`-`scsi30`, and
-  `virtio0`-`virtio15`. Guest machine/controller constraints still apply.
-- `root_disk.slot` must already contain the OS disk. The module does not assume
-  that every template boots from `scsi0`.
-- Use unused slots when creating additional disks. In legacy mode also describe
-  inherited data disks you intend to retain. The module rejects a collision
-  with the declared root slot but cannot inspect template devices statically.
-- Disks can grow, not shrink. A smaller requested size produces a provider error
-  against the actual disk size. Existing template sizes are not known to static
-  input validation.
-- `target_datastore` controls clone placement. In legacy mode per-disk
-  `datastore_id` also controls placement and can move existing disks. In
-  experimental mode it allocates additional disks but does not migrate existing
-  volumes; `root_disk.datastore_id` is unused in that mode.
-- Expanding a virtual disk does not guarantee expansion of the guest partition
-  or filesystem. Formatting/mounting new data disks is also a guest task.
-- In experimental mode removing an entry stops management without deletion.
-  In legacy mode removal can remove/detach the disk. Changing a slot is not a
-  disk rename in either mode.
+  `virtio0`-`virtio15`.
+- `root_disk.slot` must match the existing OS disk slot. The module does not
+  assume every template boots from `scsi0`.
+- Use unused slots for additional disks. In legacy mode, unlisted/inherited data
+  disks are still managed as part of the provider contract.
+- Disks can grow, not shrink. Expanding a virtual disk does not resize the guest
+  filesystem; that is a guest task.
+- In experimental mode removing an entry stops management without deletion. In
+  legacy mode removal can remove or detach the disk.
 
-The module constructs a disk map for experimental mode and uses `dynamic`
-disk blocks for legacy mode.
+The module builds a simple disk map for `experimental` mode and `dynamic` disk
+blocks for `legacy` mode.
 
-## Built-in VM count
+## VM count
 
-Use `vm_count` to set how many VMs to create. The module creates each VM with
-Terraform `count.index` internally.
+Use `vm_count` to set how many VMs to create.
 
 ```hcl
 module "vm" {
@@ -257,23 +225,14 @@ Outputs are lists for every count, including one and zero.
 
 ## Lifecycle and scope
 
-Mode changes and clone settings can require replacement. Experimental mode also
-requires replacement for target-node changes; legacy mode ignores node changes
-after creation. Always inspect the plan before applying. No explicit `ide2`
-deletion is configured, but legacy resource defaults and reconciliation still
-need review.
-
-`delete_unreferenced_disks_on_destroy` is explicitly false. **This does not
-protect the VM or its attached disks from `terraform destroy`.** Standard
-provider shutdown/purge behaviour still applies.
-
-Deferred features include static IPs, per-VM cloud-init/Cloudbase-Init, credentials
-or SSH key injection, guest hostname/domain join, template creation, additional
-NICs, VLAN/firewall controls, device tuning/deletion, linked clones, passthrough,
-HA, backups, and advanced timeouts.
-
-Legacy mode provides a foundation for externally managed placement; actual
-ProxLB configuration and live acceptance are outside this module.
+- Mode changes and clone settings can require replacement.
+- `experimental` mode also requires replacement for target-node changes; legacy
+  mode ignores node changes after creation.
+- `delete_unreferenced_disks_on_destroy` is explicitly false. This does not
+  prevent `terraform destroy` from removing the VM and attached disks.
+- This is a baseline module. Static IPs, guest identity, advanced networking,
+  template creation, HA, backups, and other operator-specific features are out of
+  scope.
 
 ## Validation
 
@@ -301,24 +260,6 @@ terraform -chdir=examples/minimal validate
 terraform -chdir=examples/disks init -backend=false -input=false
 terraform -chdir=examples/disks validate
 ```
-
-### Live acceptance checklist
-
-Run only in an authorised disposable environment:
-
-1. Clone a prepared Linux template and a prepared Windows template in each mode.
-2. Verify guest boot and DHCP; inspect inherited firmware, devices, and CPU/RAM.
-3. Check explicitly managed NIC/disk options against the limitations above.
-4. Grow an OS disk, add two data disks, and grow a managed data disk. Inspect
-   slot identity and actual virtual capacity separately from guest filesystems.
-5. Verify the next plan is clean and a shrink request fails clearly.
-6. Create multiple VMs and verify unique names and IDs.
-7. In legacy mode, verify refresh, a clean plan, and a configuration update
-   after placement changes on a disposable VM.
-8. Obtain explicit approval before destructive checks; verify legacy destruction
-   still reaches the correct VM after migration.
-
-Local mocked tests do not replace this checklist.
 
 ## Provider references
 
