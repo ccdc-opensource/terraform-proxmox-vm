@@ -84,7 +84,7 @@ variable "vm_description" {
 }
 
 variable "tags" {
-  description = "Optional tag override. Null leaves tags unmanaged; an empty set clears them."
+  description = "Optional tag override. Null leaves tags unmanaged; an empty set clears tags only in experimental mode. Legacy mode cannot reliably clear tags with an empty set."
   type        = set(string)
   default     = null
 

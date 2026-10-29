@@ -107,12 +107,17 @@ Legacy provider defaults may still apply.
 | `source_node_name` | string | Source node; omitted means the target node. |
 | `target_datastore` | string | Optional clone-storage override. |
 | `vm_description` | string | Optional description override. |
-| `tags` | set(string) | Optional tags; `[]` explicitly clears tags. |
+| `tags` | set(string) | Optional tags; `[]` clears tags only in experimental mode. |
 | `cpu_cores` | number | Cores per socket, integer 1-1024. |
 | `memory_size` | number | RAM in MiB, integer 64-268435456. |
 | `network_bridge` | string | Opt into managing `net0` as a VirtIO NIC on this bridge. |
 | `root_disk` | object | OS disk `slot`, `size_gb`, and optional `datastore_id`; all three are required in legacy mode. |
 | `additional_disks` | map(object) | Disk slot to `{ size_gb, datastore_id }`; default `{}`. |
+
+In legacy mode, the provider may skip empty tag lists during clone creation and
+refresh. Consequently, inherited template tags or previously unmanaged tags
+may remain after setting `tags = []`, even when Terraform reports a clean plan.
+Use experimental mode when relying on an empty set to clear tags.
 
 CPU and memory configuration is omitted unless overrides are supplied.
 Experimental mode sends only the requested fields. Legacy mode uses nested
