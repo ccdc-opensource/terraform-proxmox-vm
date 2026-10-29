@@ -13,8 +13,7 @@ Set `vm_count` to the number of VMs you want, and choose the resource mode with
 | `"legacy"` (default) | `proxmox_virtual_environment_vm` | Explicit boot-disk configuration; permits externally managed node placement. |
 | `"experimental"` | `proxmox_cloned_vm` | Opt-in hardware management; fixed-node deployment. |
 
-`experimental` is this module's label for the clone-specific implementation.
-It does not select the separate provider resource named `proxmox_vm`.
+`experimental` uses the `proxmox_cloned_vm` resource.
 
 ## Mode requirements
 
