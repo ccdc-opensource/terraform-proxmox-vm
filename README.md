@@ -1,11 +1,12 @@
 # terraform-proxmox-vm
 
-A VM module using `bpg/proxmox`, defaulting to the legacy VM resource.
-It creates and starts full clones of prepared Linux or Windows templates.
-Set `vm_count` to change the number of VMs, or explicitly opt into the
-experimental clone-specific implementation.
+A VM module using `bpg/proxmox` that supports both Proxmox resource styles:
+`proxmox_virtual_environment_vm` in the default legacy mode, and
+`proxmox_cloned_vm` in the explicit experimental opt-in mode.
 
-## Resource modes
+It creates and starts full clones of prepared Linux or Windows templates.
+Set `vm_count` to change the number of VMs, and choose the resource mode with
+`vm_mode`:
 
 | `vm_mode` | Resource | Behaviour |
 | --- | --- | --- |
@@ -14,6 +15,16 @@ experimental clone-specific implementation.
 
 `experimental` is this module's label for the clone-specific implementation.
 It does not select the separate provider resource named `proxmox_vm`.
+
+## Mode requirements
+
+- `"legacy"` (default): requires an explicit `root_disk` with `slot`,
+  `size_gb`, and datastore values. The provider treats `node_name` as the
+  initial placement input, and later changes are ignored after creation.
+  Empty `tags = []` is not reliably cleared in this mode.
+- `"experimental"`: clone-specific opt-in mode. `root_disk` can be omitted
+  when the template defaults are acceptable. This mode uses the clone resource
+  and supports `tags = []` as the explicit clear behaviour.
 
 In legacy mode, Terraform ignores `node_name` changes after creation so that
 ProxLB or another external system can own placement. Editing `node_name` will
