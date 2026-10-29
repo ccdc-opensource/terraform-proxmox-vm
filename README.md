@@ -5,7 +5,7 @@ A VM module using `bpg/proxmox` that supports both Proxmox resource styles:
 `proxmox_cloned_vm` in the explicit experimental opt-in mode.
 
 It creates and starts full clones of prepared Linux or Windows templates.
-Set `vm_count` to change the number of VMs, and choose the resource mode with
+Set `vm_count` to the number of VMs you want, and choose the resource mode with
 `vm_mode`:
 
 | `vm_mode` | Resource | Behaviour |
@@ -27,11 +27,10 @@ It does not select the separate provider resource named `proxmox_vm`.
   and supports `tags = []` as the explicit clear behaviour.
 
 In legacy mode, Terraform ignores `node_name` changes after creation so that
-ProxLB or another external system can own placement. Editing `node_name` will
-not request a Terraform migration. The provider discovers the current node
-during refresh, but live migration, subsequent updates, and destruction must
-be tested on your cluster before relying on this integration. The module does
-not install, configure, or invoke ProxLB.
+ProxLB or another external system can own placement. The provider discovers
+the current node during refresh, but placement changes, subsequent updates, and
+destruction must be tested on your cluster before relying on this integration.
+The module does not install, configure, or invoke ProxLB.
 
 ## Requirements
 
@@ -113,7 +112,7 @@ Legacy provider defaults may still apply.
 | `vm_mode` | string | `"legacy"` by default; `"experimental"` is an explicit opt-in. |
 | `node_name` | string | Required initial node; only experimental mode enforces later changes. |
 | `vm_name` | string | Required base name; each VM gets an indexed suffix such as `-01`. |
-| `vm_count` | number | Non-negative integer VM count; default `1` (also used for null). |
+| `vm_count` | number | Number of VMs to create; default `1` (also used for null). |
 | `source_vm_id` | number | Required positive integer template ID. |
 | `source_node_name` | string | Source node; omitted means the target node. |
 | `target_datastore` | string | Optional clone-storage override. |
@@ -224,7 +223,8 @@ disk blocks for legacy mode.
 
 ## Built-in VM count
 
-Set `vm_count` directly on the module. No caller-level `count` is required:
+Use `vm_count` to set how many VMs to create. The module creates each VM with
+Terraform `count.index` internally.
 
 ```hcl
 module "vm" {
@@ -241,20 +241,9 @@ module "vm" {
     datastore_id = "local-lvm"
   }
 }
-
-output "vm_ids" {
-  value = module.vm.vm_ids
-}
 ```
 
-This creates `sandbox-01`, `sandbox-02`, and `sandbox-03` with the same template
-and configuration. Names always include the suffix, even for one VM, so changing
-the count does not rename existing instances. Choose the Linux or Windows
-template ID for each fleet.
-
-Reducing `vm_count` destroys the highest-index VMs. Setting it to zero destroys
-all managed VMs and returns empty output lists. The count must be known at plan
-time. Use separate module calls if you need different per-VM configurations.
+This creates `sandbox-01`, `sandbox-02`, and `sandbox-03`.
 
 ## Outputs
 
@@ -286,33 +275,6 @@ HA, backups, and advanced timeouts.
 Legacy mode provides a foundation for externally managed placement; actual
 ProxLB configuration and live acceptance are outside this module.
 
-### Changes from the initial draft
-
-- Node, VM name, and template ID are required instead of environment-specific
-  defaults.
-- Optional values use null, not invalid empty-string numeric/boolean defaults.
-- `disk_size_gb` and `disk_datastore_id` are replaced by `root_disk` and
-  `additional_disks`. Select the existing root slot explicitly.
-- CPU architecture/type/sockets, ballooning/shares, NIC tuning, disk tuning, VGA,
-  deletion, timeouts, clone retries, and destroy-option inputs are not exposed
-  in the baseline. Full clone is fixed to true.
-- The default `ide2` deletion is removed.
-- `vm_count` is built in and defaults to one. `vm_name` is now a base name;
-  the module appends `-01`, `-02`, and so on.
-- Singular outputs are replaced by `vm_ids`, `vm_names`, and `node_names`.
-  Update callers to consume lists.
-- `vm_mode` now defaults to `"legacy"`. Existing clone-backed deployments need
-  an explicit `"experimental"` selection to preserve the old resource type.
-
-The module retains a `moved` block from the earlier singleton cloned resource to
-index zero in experimental mode. It does not convert state between modes.
-An existing VM's name gains the `-01` suffix. Inspect the migration plan before
-applying. If migrating from caller-level module `count` to this built-in input,
-the caller must also explicitly migrate module addresses; the internal `moved`
-block does not handle that change.
-
-Review existing callers and Terraform state before adopting this draft API.
-
 ## Validation
 
 From the module directory:
@@ -329,7 +291,7 @@ experimental inheritance wiring, legacy block mappings, mode validation,
 explicit overrides, disk maps, outputs, and the two examples. Tests cover
 default/null/zero/one/multiple VM counts, scaling, and legacy node-change
 suppression. Mocked IDs are fixed test values, not evidence of real Proxmox
-allocation, template inheritance, migration discovery, or guest readiness.
+allocation, template inheritance, placement discovery, or guest readiness.
 
 Validate the example configurations separately:
 
@@ -351,8 +313,8 @@ Run only in an authorised disposable environment:
    slot identity and actual virtual capacity separately from guest filesystems.
 5. Verify the next plan is clean and a shrink request fails clearly.
 6. Create multiple VMs and verify unique names and IDs.
-7. In legacy mode, migrate a disposable VM externally, then verify refresh, a
-   clean plan, and a configuration update on the new node.
+7. In legacy mode, verify refresh, a clean plan, and a configuration update
+   after placement changes on a disposable VM.
 8. Obtain explicit approval before destructive checks; verify legacy destruction
    still reaches the correct VM after migration.
 
@@ -360,6 +322,7 @@ Local mocked tests do not replace this checklist.
 
 ## Provider references
 
+- [bpg/proxmox provider repository](https://github.com/bpg/terraform-provider-proxmox)
 - [Cloned VM resource](https://github.com/bpg/terraform-provider-proxmox/blob/v0.118.1/docs/resources/cloned_vm.md)
 - [Legacy VM resource](https://github.com/bpg/terraform-provider-proxmox/blob/v0.118.1/docs/resources/virtual_environment_vm.md)
 - [Template inheritance guide](https://github.com/bpg/terraform-provider-proxmox/blob/v0.118.1/docs/guides/cloned-vm.md)

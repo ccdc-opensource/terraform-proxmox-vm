@@ -132,7 +132,3 @@ resource "proxmox_virtual_environment_vm" "vm" {
   }
 }
 
-moved {
-  from = proxmox_cloned_vm.vm
-  to   = proxmox_cloned_vm.vm[0]
-}
