@@ -9,8 +9,6 @@ terraform {
   }
 }
 
-provider "proxmox" {}
-
 variable "vm_mode" {
   description = "Legacy by default; experimental opts into the clone-specific resource."
   type        = string

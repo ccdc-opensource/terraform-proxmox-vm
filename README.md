@@ -52,8 +52,6 @@ When referencing this repository remotely, use an approved immutable module
 revision rather than a moving branch.
 
 ```hcl
-provider "proxmox" {}
-
 module "vm" {
   source = "./modules/terraform-proxmox-vm"
 
