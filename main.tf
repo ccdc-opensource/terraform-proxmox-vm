@@ -49,6 +49,11 @@ resource "proxmox_cloned_vm" "vm" {
 
   lifecycle {
     precondition {
+      condition     = var.cloud_init == null
+      error_message = "cloud_init requires vm_mode = \"legacy\"; the experimental clone resource cannot manage cloud-init."
+    }
+
+    precondition {
       condition     = var.root_disk == null ? true : !contains(keys(var.additional_disks), var.root_disk.slot)
       error_message = "additional_disks must not contain the root_disk slot."
     }
@@ -69,6 +74,59 @@ resource "proxmox_virtual_environment_vm" "vm" {
     node_name    = var.source_node_name
     full         = true
     datastore_id = var.target_datastore
+  }
+
+  dynamic "initialization" {
+    for_each = var.cloud_init == null ? [] : [var.cloud_init]
+    content {
+      datastore_id         = initialization.value.datastore_id
+      interface            = initialization.value.interface
+      file_format          = initialization.value.file_format
+      type                 = initialization.value.type
+      upgrade              = initialization.value.upgrade
+      user_data_file_id    = initialization.value.user_data_file_id
+      vendor_data_file_id  = initialization.value.vendor_data_file_id
+      network_data_file_id = initialization.value.network_data_file_id
+      meta_data_file_id    = initialization.value.meta_data_file_id
+
+      dynamic "dns" {
+        for_each = initialization.value.dns == null ? [] : [initialization.value.dns]
+        content {
+          domain  = dns.value.domain
+          servers = dns.value.servers
+        }
+      }
+
+      dynamic "user_account" {
+        for_each = initialization.value.user_account == null ? [] : [initialization.value.user_account]
+        content {
+          username = user_account.value.username
+          keys     = user_account.value.keys
+          password = user_account.value.password
+        }
+      }
+
+      dynamic "ip_config" {
+        for_each = initialization.value.ip_config
+        content {
+          dynamic "ipv4" {
+            for_each = ip_config.value.ipv4 == null ? [] : [ip_config.value.ipv4]
+            content {
+              address = ipv4.value.address
+              gateway = ipv4.value.gateway
+            }
+          }
+
+          dynamic "ipv6" {
+            for_each = ip_config.value.ipv6 == null ? [] : [ip_config.value.ipv6]
+            content {
+              address = ipv6.value.address
+              gateway = ipv6.value.gateway
+            }
+          }
+        }
+      }
+    }
   }
 
   dynamic "cpu" {
@@ -131,4 +189,3 @@ resource "proxmox_virtual_environment_vm" "vm" {
     }
   }
 }
-
