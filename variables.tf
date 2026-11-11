@@ -22,7 +22,7 @@ variable "node_name" {
 }
 
 variable "vm_name" {
-  description = "Base VM name. Each clone gets an indexed suffix such as -01; does not configure guest hostnames."
+  description = "Base VM name. Each clone gets an indexed suffix such as -01; native cloud-init uses this indexed name as the guest hostname when enabled."
   type        = string
   nullable    = false
 
@@ -126,6 +126,64 @@ variable "network_bridge" {
   validation {
     condition     = var.network_bridge == null ? true : trimspace(var.network_bridge) != ""
     error_message = "network_bridge must be null or a non-empty bridge name."
+  }
+}
+
+variable "cloud_init" {
+  description = "Optional legacy cloud-init configuration. Null omits initialization; {} enables native hostname configuration from the indexed VM name. Unspecified account, DNS, and IP blocks are omitted."
+  type = object({
+    datastore_id         = optional(string)
+    interface            = optional(string)
+    file_format          = optional(string)
+    type                 = optional(string)
+    upgrade              = optional(bool)
+    user_data_file_id    = optional(string)
+    vendor_data_file_id  = optional(string)
+    network_data_file_id = optional(string)
+    meta_data_file_id    = optional(string)
+    dns = optional(object({
+      domain  = optional(string)
+      servers = optional(list(string))
+    }))
+    user_account = optional(object({
+      username = optional(string)
+      keys     = optional(list(string))
+      password = optional(string)
+    }))
+    ip_config = optional(list(object({
+      ipv4 = optional(object({
+        address = string
+        gateway = optional(string)
+      }))
+      ipv6 = optional(object({
+        address = string
+        gateway = optional(string)
+      }))
+    })), [])
+  })
+  default = null
+
+  validation {
+    condition = var.cloud_init == null ? true : (
+      var.cloud_init.user_account == null || var.cloud_init.user_data_file_id == null
+    )
+    error_message = "cloud_init.user_account and cloud_init.user_data_file_id cannot be used together."
+  }
+
+  validation {
+    condition = var.cloud_init == null ? true : (
+      length(var.cloud_init.ip_config) == 0 || var.cloud_init.network_data_file_id == null
+    )
+    error_message = "cloud_init.ip_config and cloud_init.network_data_file_id cannot be used together."
+  }
+
+  validation {
+    condition = var.cloud_init == null ? true : alltrue([
+      for config in var.cloud_init.ip_config : config == null ? false : (
+        config.ipv4 != null || config.ipv6 != null
+      )
+    ])
+    error_message = "Each cloud_init.ip_config entry must define ipv4 or ipv6."
   }
 }
 

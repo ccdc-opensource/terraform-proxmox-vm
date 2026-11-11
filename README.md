@@ -82,19 +82,22 @@ ID, and base name are then required.
 
 ## Template preparation
 
-Templates, not this module, configure DHCP and the operating system.
+Templates prepare the operating system. Networking can be inherited from the
+template or configured through the optional legacy cloud-init input.
 
 - **Linux:** prepare unique machine identity and DHCP client identity on cloning,
-  enable DHCP, install required disk/NIC drivers, and prepare any cloud-init
-  configuration in advance.
+  install required disk/NIC drivers, and configure networking or enable
+  cloud-init. For cloud-init, install and enable it, clean its previous instance
+  state, then shut down the guest before converting it to a template.
 - **Windows:** use a suitably generalised template and first-boot process, enable
   DHCP, and include required disk/NIC drivers. Configure EFI, secure boot, and
   TPM on the template when required.
 - **Both:** confirm the boot disk slot and size, network bridge, DHCP availability,
   boot order, and any guest-agent configuration before cloning.
 
-The VM name in Proxmox does not set the guest hostname. A successful apply or a
-started VM does not prove that the guest has booted or obtained a DHCP lease.
+The VM name alone does not set the guest hostname; native cloud-init can use it
+as described below. A successful apply or a started VM does not prove that the
+guest has booted or obtained a DHCP lease.
 The module does not expose guest IP addresses, keeping outputs consistent
 between resource modes.
 
@@ -118,6 +121,7 @@ Legacy provider defaults may still apply.
 | `cpu_cores` | number | Cores per socket, integer 1-1024. |
 | `memory_size` | number | RAM in MiB, integer 64-268435456. |
 | `network_bridge` | string | Opt into managing `net0` as a VirtIO NIC on this bridge. |
+| `cloud_init` | object | Legacy only. Null omits initialization; `{}` enables native cloud-init with the indexed VM name as hostname. Other settings are optional. |
 | `root_disk` | object | OS disk `slot`, `size_gb`, and optional `datastore_id`; all three are required in legacy mode. |
 | `additional_disks` | map(object) | Disk slot to `{ size_gb, datastore_id }`; default `{}`. |
 
@@ -131,6 +135,77 @@ Experimental mode sends only the requested fields. Legacy mode uses nested
 blocks whose defaults can also affect sockets, CPU type, and ballooning.
 Review the plan against the template rather than assuming partial-block
 inheritance. A root disk is mandatory in legacy mode when `vm_count` is nonzero.
+
+## Cloud-init after cloning
+
+In legacy mode, add `cloud_init = {}` to your module call to configure the
+hostname from the indexed VM name, such as `sandbox-01`. The provider configures
+the cloud-init drive after cloning and before starting the VM. No snippets
+upload or additional provider credentials are needed for native cloud-init.
+Omitting `cloud_init` (or setting it to null) retains the previous behaviour.
+
+For example, add this alongside your existing node, template, name, and root
+disk inputs:
+
+```hcl
+cloud_init = {
+  datastore_id = "local-lvm"
+}
+```
+
+Use your actual cloud-init disk datastore; the provider defaults to `local-lvm`
+when omitted. The optional `interface` is detected from an inherited cloud-init
+drive, otherwise defaults to `ide2`; it must not overlap a root or data disk.
+The guest must allow cloud-init to set its hostname (`preserve_hostname: false`).
+Inherited custom user-data or meta-data snippets can override native hostname
+configuration; remove or adapt those snippets in the prepared template.
+
+Other settings are only supplied when defined:
+
+```hcl
+cloud_init = {
+  datastore_id = "local-lvm"
+
+  user_account = {
+    username = "ubuntu"
+    keys     = [trimspace(file(pathexpand("~/.ssh/id_ed25519.pub")))]
+  }
+
+  dns = {
+    domain  = "example.internal"
+    servers = ["192.168.1.1"]
+  }
+
+  ip_config = [
+    { ipv4 = { address = "dhcp" } }
+  ]
+}
+```
+
+- `user_account`: optional `username`, SSH public `keys`, and `password`.
+  Passwords are stored in Terraform state; protect state and prefer SSH keys.
+- `dns`: optional search `domain` and `servers`.
+- `ip_config`: ordered entries corresponding to `net0`, `net1`, etc. Each entry
+  defines `ipv4`, `ipv6`, or both, with an `address` and optional `gateway`.
+  IPv4 supports CIDR or `dhcp`; IPv6 supports CIDR, `dhcp`, or `auto`. Omit the
+  gateway for DHCP/SLAAC. A static IP is shared by every clone in this module
+  call; use separate module calls for distinct static IPs.
+- `file_format`, `type`, and `upgrade`: optional native provider settings.
+  Leaving `upgrade` unset preserves Proxmox's behaviour (normally enabled);
+  explicitly setting it requires `root@pam` authentication.
+- `user_data_file_id`, `vendor_data_file_id`, `network_data_file_id`, and
+  `meta_data_file_id`: optional references to existing Proxmox snippets.
+  `user_data_file_id` conflicts with `user_account`, and `network_data_file_id`
+  conflicts with `ip_config`. Custom user-data must configure its own hostname.
+  The provider can also clear inherited custom file references with explicit
+  empty strings when no other custom file reference is set.
+
+Unspecified DNS, account, IP, and IP-family blocks are not emitted. Native
+provider/Proxmox defaults still apply; this is not a guarantee of preserving
+every inherited setting. Cloud-init normally runs on first boot, so changes do
+not automatically reprovision an already-initialized guest.
+
+`cloud_init` is rejected in experimental mode rather than silently ignored.
 
 ## Important caveats
 
@@ -227,9 +302,9 @@ Outputs are lists for every count, including one and zero.
   mode ignores node changes after creation.
 - `delete_unreferenced_disks_on_destroy` is explicitly false. This does not
   prevent `terraform destroy` from removing the VM and attached disks.
-- This is a baseline module. Static IPs, guest identity, advanced networking,
-  template creation, HA, backups, and other operator-specific features are out of
-  scope.
+- This is a baseline module. Beyond basic legacy cloud-init, advanced guest
+  provisioning/networking, template creation, HA, backups, and other
+  operator-specific features are out of scope.
 
 ## Validation
 
@@ -248,6 +323,9 @@ explicit overrides, disk maps, outputs, and the two examples. Tests cover
 default/null/zero/one/multiple VM counts, scaling, and legacy node-change
 suppression. Mocked IDs are fixed test values, not evidence of real Proxmox
 allocation, template inheritance, placement discovery, or guest readiness.
+Cloud-init tests cover opt-in hostname wiring, omitted optional blocks, explicit
+settings, conflicting inputs, and experimental-mode rejection; they do not prove
+that a guest consumed its cloud-init data.
 
 Validate the example configurations separately:
 
