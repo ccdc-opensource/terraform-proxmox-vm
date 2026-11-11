@@ -172,7 +172,7 @@ variable "cloud_init" {
 
   validation {
     condition = var.cloud_init == null ? true : (
-      length(var.cloud_init.ip_config) == 0 || var.cloud_init.network_data_file_id == null
+      length(var.cloud_init.ip_config) == 0 || var.cloud_init.network_data_file_id == null || var.cloud_init.network_data_file_id == ""
     )
     error_message = "cloud_init.ip_config and cloud_init.network_data_file_id cannot be used together."
   }
