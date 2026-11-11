@@ -165,7 +165,7 @@ variable "cloud_init" {
 
   validation {
     condition = var.cloud_init == null ? true : (
-      var.cloud_init.user_account == null || var.cloud_init.user_data_file_id == null
+      var.cloud_init.user_account == null || var.cloud_init.user_data_file_id == null || var.cloud_init.user_data_file_id == ""
     )
     error_message = "cloud_init.user_account and cloud_init.user_data_file_id cannot be used together."
   }
