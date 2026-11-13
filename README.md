@@ -285,6 +285,9 @@ module "vm" {
 
 This creates `sandbox-01`, `sandbox-02`, and `sandbox-03`.
 
+When creating multiple VMs, use terraform apply -parallelism=1 (or 2 if storage permits)
+to reduce concurrent clone storage-lock timeouts.
+
 ## Outputs
 
 | Output | Meaning |
